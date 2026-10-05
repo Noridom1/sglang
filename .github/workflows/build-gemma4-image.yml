@@ -1,0 +1,87 @@
+name: build-gemma4-image
+
+# Builds lmsysorg/sglang:<base> + the patched python/sglang from `sglang_ref`
+# and pushes ghcr.io/<owner>/sglang:<base tag>-gemma4-<short sha>.
+on:
+  workflow_dispatch:
+    inputs:
+      sglang_ref:
+        description: Commit/branch of this repo holding the patched sources
+        default: gemma4-v0.5.21
+      base_image:
+        default: lmsysorg/sglang:v0.5.21
+  push:
+    branches: [image-build]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space (image is ~25GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af || true
+          df -h /
+
+      - uses: actions/checkout@v4          # build files (this branch)
+        with:
+          path: ci-src
+      - uses: actions/checkout@v4          # patched sources
+        with:
+          ref: ${{ inputs.sglang_ref || 'gemma4-v0.5.21' }}
+          path: src
+
+      - name: Compute tag
+        id: meta
+        run: |
+          base="${{ inputs.base_image || 'lmsysorg/sglang:v0.5.21' }}"
+          sha=$(git -C src rev-parse --short=7 HEAD)
+          owner=$(echo "${{ github.repository_owner }}" | tr 'A-Z' 'a-z')
+          echo "base=$base"   >> "$GITHUB_OUTPUT"
+          echo "sha=$(git -C src rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tag=ghcr.io/$owner/sglang:${base##*:}-gemma4-$sha" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (load locally for smoke test)
+        uses: docker/build-push-action@v6
+        with:
+          context: src
+          file: ci-src/ci/Dockerfile.gemma4
+          build-args: |
+            BASE=${{ steps.meta.outputs.base }}
+            SGLANG_SHA=${{ steps.meta.outputs.sha }}
+          load: true
+          tags: ${{ steps.meta.outputs.tag }}
+
+      - name: Smoke test - patched package imports
+        run: |
+          docker run --rm ${{ steps.meta.outputs.tag }} python3 - <<'PY'
+          import sglang
+          from sglang.srt.model_executor.runner.prefill_cuda_graph_runner import PrefillCudaGraphRunner
+          import inspect
+          assert "contains_mm_inputs" in inspect.signature(PrefillCudaGraphRunner.can_replay_locally).parameters
+          assert hasattr(PrefillCudaGraphRunner, "_fa4_prefill")
+          print("patched sglang ok", sglang.__version__)
+          PY
+
+      - name: Unit tests of the two PRs (informational; no GPU on this runner)
+        continue-on-error: true
+        run: |
+          docker run --rm -v "$PWD/src/test:/sgl-test:ro" ${{ steps.meta.outputs.tag }} \
+            python3 -m pytest -x -q \
+              /sgl-test/registered/unit/model_executor/test_prefill_cuda_graph_runner.py \
+              /sgl-test/registered/kernels/ops/speculative/test_gemma_aux_hidden_states.py
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push
+        run: docker push ${{ steps.meta.outputs.tag }}

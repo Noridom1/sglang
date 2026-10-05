@@ -1,0 +1,16 @@
+# Thin overlay: official sglang release image + the patched sglang Python
+# package from the checked-out fork commit (build context = repo root).
+ARG BASE=lmsysorg/sglang:v0.5.21
+FROM ${BASE}
+
+COPY python/sglang /tmp/sglang_patched
+RUN SP="$(python3 -c 'import sglang,os;print(os.path.dirname(sglang.__file__))')" \
+ && echo "overlaying $SP" \
+ && rm -rf "$SP" && cp -r /tmp/sglang_patched "$SP" \
+ && rm -rf /tmp/sglang_patched \
+ && python3 -c "import sglang;print('sglang', sglang.__version__, sglang.__file__)"
+
+ARG SGLANG_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/Noridom1/sglang" \
+      org.opencontainers.image.revision="${SGLANG_SHA}" \
+      org.opencontainers.image.description="sglang v0.5.21 + PRs #39286 #42019 (gemma4)"
