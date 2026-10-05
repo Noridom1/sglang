@@ -285,6 +285,7 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
     buffer population, attention metadata init, and output slicing.
     """
 
+    _fa4_prefill = False
     _backend_can_run_prefill_cuda_graph = None
 
     def __init__(self, model_runner: ModelRunner):
@@ -298,6 +299,10 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
         self._backend_can_run_prefill_cuda_graph = getattr(
             model_runner.attn_backend, "can_run_prefill_cuda_graph", None
         )
+        prefill_attn_backend = getattr(
+            model_runner.attn_backend, "prefill_backend", model_runner.attn_backend
+        )
+        self._fa4_prefill = getattr(prefill_attn_backend, "fa_impl_ver", None) == 4
         # --- model flags ----------------------------------------------
         self.quant_config = getattr(model_runner.model, "quant_config", None)
         self.is_multimodal = model_runner.model_config.is_multimodal
@@ -1229,6 +1234,7 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
         lora_ineligible: bool = False,
         is_mixed: bool = False,
         batch_max_context_len: Optional[int] = None,
+        contains_mm_inputs: bool = False,
     ) -> bool:
         """Rank-local replay eligibility: the single source of truth for
         ``can_run_graph`` (ForwardBatch, forward time) and the dp mlp-sync
@@ -1237,6 +1243,11 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
         ``capture_hidden_mode=None`` when unknown at the call site (it is
         rank-uniform; forward-time-only checking cannot split the group).
         """
+        # Full replay bypasses forward_extend's Python image-mask guard.
+        # Keep FA4 multimodal prefill eager until its full-graph path is
+        # supported; both forward dispatch and the DP vote use this policy.
+        if self._is_full_backend and self._fa4_prefill and contains_mm_inputs:
+            return False
         if self._is_full_backend and batch_size > self._capture_req_slots:
             return False
         # LoRA replays need prepare_lora_batch's static metadata. lora_manager
@@ -1335,6 +1346,7 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
                 )
             ),
             batch_max_context_len=batch_max_context_len,
+            contains_mm_inputs=forward_batch.contains_mm_inputs(),
         ):
             return False
         if getattr(self, "enable_cp_bcg_capture", False) and is_cp_active(
