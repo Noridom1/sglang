@@ -244,6 +244,16 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             quant_config,
             prefix=add_prefix("language_model", prefix),
         )
+        # Same PLE masking as forward, for the prefill CUDA graph body.
+        self.language_model.ple_placeholder_token_ids = tuple(
+            token_id
+            for token_id in (
+                getattr(config, f"{modality}_token_id", None)
+                for modality in ("image", "video", "audio")
+            )
+            if token_id is not None
+        )
+        self.language_model.ple_pad_token_id = config.text_config.pad_token_id
 
         # Tied embeddings: under PP the embed_tokens lives on the first rank
         # while logits run on the last rank, so we can't reuse the embedding

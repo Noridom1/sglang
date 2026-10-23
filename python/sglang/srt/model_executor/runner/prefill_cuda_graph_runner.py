@@ -2135,6 +2135,10 @@ class PrefillCudaGraphRunner(BaseCudaGraphRunner):
             tail_batch.attn_tp_sequence_sharded = (
                 static_forward_batch.attn_tp_sequence_sharded
             )
+            # The body graph reads the static positions slot, so models that
+            # shift positions in place in their eager wrapper (Gemma-4 does
+            # `positions += 1`) must shift that slot, not the raw batch's.
+            tail_batch.positions = static_forward_batch.positions[:raw_num_tokens]
         else:
             # BCG has no request-slot padding, so static_forward_batch is
             # already the serving batch and already holds the body's verdict.

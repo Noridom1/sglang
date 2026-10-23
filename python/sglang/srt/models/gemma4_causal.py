@@ -944,6 +944,10 @@ class Gemma4TextModel(PreTrainedModel):
         else:
             self.norm = PPMissingLayer()
         self.layers_to_capture = []
+        # Token ids whose PLE lookup uses the pad id (multimodal placeholders);
+        # set by the multimodal wrapper. See forward.
+        self.ple_placeholder_token_ids = ()
+        self.ple_pad_token_id = config.pad_token_id
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Embedding:
@@ -1031,14 +1035,27 @@ class Gemma4TextModel(PreTrainedModel):
         **kwargs,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]], PPProxyTensors]:
         if self.pp_group.is_first_rank:
-            if (input_ids is None) ^ (input_embeds is not None):
-                raise ValueError(
-                    "You must specify exactly one of input_ids or inputs_embeds"
-                )
+            if input_ids is None and input_embeds is None:
+                raise ValueError("You must specify input_ids or inputs_embeds")
 
-            if input_ids is not None:
+            if input_embeds is None:
                 input_embeds = self.embed_tokens(input_ids)
                 per_layer_inputs = self.get_per_layer_inputs(input_ids)
+            elif (
+                input_ids is not None
+                and per_layer_inputs is None
+                and self.embed_tokens_per_layer is not None
+            ):
+                # Prefill CUDA graph capture passes both input_ids and the
+                # static input_embeds slot, and replay refills only the static
+                # slots, dropping the wrapper's per_layer_inputs kwarg. Compute
+                # them here from input_ids so the graph reads the input_ids slot.
+                ple_ids = input_ids
+                for token_id in self.ple_placeholder_token_ids:
+                    ple_ids = torch.where(
+                        ple_ids == token_id, self.ple_pad_token_id, ple_ids
+                    )
+                per_layer_inputs = self.get_per_layer_inputs(ple_ids)
             per_layer_inputs = self.project_per_layer_inputs(
                 input_embeds, per_layer_inputs
             )
