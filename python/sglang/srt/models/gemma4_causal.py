@@ -34,6 +34,7 @@ from sglang.kernels.ops.moe.gemma4_routing import (
     gemma_routing_post_topk,
 )
 from sglang.srt.distributed.utils import get_group_rank_size
+from sglang.srt.environ import envs
 from sglang.srt.layers.aux_hidden_states import AuxHiddenStateList
 from sglang.srt.layers.layer_boundary import (
     SumGroup,
@@ -948,6 +949,9 @@ class Gemma4TextModel(PreTrainedModel):
         # set by the multimodal wrapper. See forward.
         self.ple_placeholder_token_ids = ()
         self.ple_pad_token_id = config.pad_token_id
+        # Added to positions in forward; the multimodal wrapper sets 1 (its
+        # positions are 1-indexed).
+        self.position_offset = 0
         self.post_init()
 
     def get_input_embeddings(self) -> nn.Embedding:
@@ -1034,6 +1038,14 @@ class Gemma4TextModel(PreTrainedModel):
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
         **kwargs,
     ) -> Union[torch.Tensor, Tuple[torch.Tensor, List[torch.Tensor]], PPProxyTensors]:
+        # Shift here rather than in the wrapper: prefill CUDA graphs capture
+        # only this forward and refill only its static positions slot.
+        if self.position_offset:
+            if envs.SGLANG_GEMMA_OUT_OF_PLACE_POSITION_MUTATION.get():
+                positions = positions + self.position_offset
+            else:
+                positions += self.position_offset
+
         if self.pp_group.is_first_rank:
             if input_ids is None and input_embeds is None:
                 raise ValueError("You must specify input_ids or inputs_embeds")

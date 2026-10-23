@@ -29,7 +29,6 @@ from transformers import (
     PreTrainedModel,
 )
 
-from sglang.srt.environ import envs
 from sglang.srt.layers.attention.triton_backend import TritonAttnBackend
 from sglang.srt.layers.layernorm import Gemma4RMSNorm
 from sglang.srt.layers.linear import ReplicatedLinear
@@ -254,6 +253,7 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             if token_id is not None
         )
         self.language_model.ple_pad_token_id = config.text_config.pad_token_id
+        self.language_model.position_offset = 1
 
         # Tied embeddings: under PP the embed_tokens lives on the first rank
         # while logits run on the last rank, so we can't reuse the embedding
@@ -667,11 +667,6 @@ class Gemma4ForConditionalGeneration(PreTrainedModel):
             raise ValueError(
                 "You must specify exactly one of input_ids or inputs_embeds"
             )
-
-        if envs.SGLANG_GEMMA_OUT_OF_PLACE_POSITION_MUTATION.get():
-            positions = positions + 1
-        else:
-            positions += 1
 
         per_layer_inputs = None
         # PLE table and the per-layer projection live on the first rank only,
