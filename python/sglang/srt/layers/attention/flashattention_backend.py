@@ -47,6 +47,7 @@ from sglang.srt.layers.radix_attention import AttentionType
 from sglang.srt.mem_cache.kv.alloc.id_space import IdSpaceKind
 from sglang.srt.mem_cache.kv_cache_dtype import (
     FA4_SM90_FP8_KV_HEAD_DIMS,
+    current_device_index,
     fa4_casts_fp8_kv,
 )
 from sglang.srt.mem_cache.layout.paged_view import paged_kv_view, paged_view
@@ -328,7 +329,7 @@ class FlashAttentionBackend(AttentionBackend):
         )
         self._anchor_window_cache = {}
         self._anchor_first_layer = {}
-        device_capability = get_device_capability()
+        device_capability = get_device_capability(current_device_index())
         if self.fa3_upgrades_to_fa4 and device_capability[0] < 9:
             raise ValueError(
                 f"The fa3 backend runs head_dim {model_head_dim} layers on FA4, "

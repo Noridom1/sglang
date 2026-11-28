@@ -157,6 +157,7 @@ class TestRunnerKvCacheDtypeLabel(CustomTestCase):
                 self.subTest(capability=capability, head_dim=head_dim, arch=arch),
                 patch.object(kv_cache_dtype_module, "_is_hip", False),
                 patch.object(torch.cuda, "is_available", return_value=True),
+                patch.object(torch.cuda, "current_device", return_value=0),
                 patch.object(
                     torch.cuda, "get_device_capability", return_value=capability
                 ),
@@ -172,6 +173,33 @@ class TestRunnerKvCacheDtypeLabel(CustomTestCase):
                     ),
                     expected,
                 )
+
+    def test_a_dflash_fa4_draft_reads_the_workers_gpu_not_gpu_0(self):
+        """With --base-gpu-id 1, the worker runs on GPU 1 (SM90) while GPU 0 is
+        another architecture: the draft must keep the fp8 cache FA4 casts on GPU 1."""
+        from sglang.srt.mem_cache import kv_cache_dtype as kv_cache_dtype_module
+
+        capabilities = {0: (10, 0), 1: (9, 0)}
+        with (
+            patch.object(kv_cache_dtype_module, "_is_hip", False),
+            patch.object(torch.cuda, "is_available", return_value=True),
+            patch.object(torch.cuda, "current_device", return_value=1),
+            patch.object(
+                torch.cuda,
+                "get_device_capability",
+                side_effect=lambda device=None: capabilities[device],
+            ),
+        ):
+            self.assertEqual(
+                _resolve(
+                    flag="fp8_e4m3",
+                    is_draft_worker=True,
+                    algorithm="DFLASH",
+                    draft_backend="fa4",
+                    head_dim=256,
+                ),
+                ("fp8_e4m3", torch.float8_e4m3fn),
+            )
 
     def test_fa4_casts_only_a_plain_fp8_e4m3_mha_cache_on_sm90(self):
         from sglang.srt.mem_cache.kv_cache_dtype import fa4_casts_fp8_kv

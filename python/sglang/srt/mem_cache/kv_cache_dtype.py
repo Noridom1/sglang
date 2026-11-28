@@ -42,6 +42,13 @@ _INDEXER_KV_CACHE_DTYPE_TO_QUANT_MODE = {
 FA4_SM90_FP8_KV_HEAD_DIMS = (256, 512)
 
 
+def current_device_index() -> int:
+    """The worker's own CUDA device, which set_device selected before KV cache and
+    attention backend init. get_device_capability() alone reads GPU 0, and with
+    --base-gpu-id that GPU can be a different architecture."""
+    return torch.cuda.current_device() if torch.cuda.is_available() else 0
+
+
 def fa4_casts_fp8_kv(
     *,
     kv_cache_dtype: torch.dtype,
@@ -80,7 +87,7 @@ def _fa4_draft_reads_kv_dtype(
         kv_cache_dtype=kv_cache_dtype,
         kv_cache_dtype_str=kv_cache_dtype_str,
         use_mla=is_mla,
-        device_capability=get_device_capability(),
+        device_capability=get_device_capability(current_device_index()),
     )
 
 
